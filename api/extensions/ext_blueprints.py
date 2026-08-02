@@ -118,3 +118,17 @@ def init_app(app: DifyApp):
         expose_headers=list(EXPOSED_HEADERS),
     )
     app.register_blueprint(trigger_bp)
+
+    # 定制 by chengm xiaoyz抽卡模块 blueprint 注册 start
+    from customs.xiaoyz.controllers.xiaoyz_api import xiaoyz_bp as xiaoyz_app_bp
+
+    _apply_cors_once(
+        xiaoyz_app_bp,
+        resources={r"/*": {"origins": dify_config.CONSOLE_CORS_ALLOW_ORIGINS}},
+        supports_credentials=True,
+        allow_headers=list(AUTHENTICATED_HEADERS),
+        methods=["GET", "PUT", "POST", "DELETE", "OPTIONS", "PATCH"],
+        expose_headers=list(EXPOSED_HEADERS),
+    )
+    app.register_blueprint(xiaoyz_app_bp)
+    # 定制 by chengm xiaoyz抽卡模块 blueprint 注册 end
