@@ -124,9 +124,16 @@ Write-Host ""
 Write-Host "========================================"
 Write-Host "Starting frontend dev server..."
 Write-Host "========================================"
+# NODE_OPTIONS tuning:
+#   --max-old-space-size=8192 : 8 GB heap (project is large; 4 GB can GC-thrash)
+#   DISABLE_CODE_INSPECTOR=1  : skip code-inspector-plugin → faster Turbopack compile
+#   To re-enable code inspector (click-to-open in IDE): remove DISABLE_CODE_INSPECTOR
+# Devtools (also controlled via web\.env.local → NEXT_PUBLIC_DISABLE_*):
+#   NEXT_PUBLIC_DISABLE_REACT_SCAN=1   : disable react-scan (component re-render visualizer)
+#   NEXT_PUBLIC_DISABLE_AGENTATION=1   : disable agentation (AI agent debugger)
 # Use the quoted form `set "VAR=value"`: the unquoted form swallows the space
 # before && into the value (PORT would become "3000 ").
-$webCmd = "cd /d `"$DIFY_WEB`" && set `"PORT=$DIFY_WEB_PORT`" && set `"NODE_OPTIONS=--max-old-space-size=4096`" && pnpm run dev --turbo"
+$webCmd = "cd /d `"$DIFY_WEB`" && set `"PORT=$DIFY_WEB_PORT`" && set `"DISABLE_CODE_INSPECTOR=1`" && set `"NODE_OPTIONS=--max-old-space-size=8192`" && pnpm run dev --turbo"
 Start-Process cmd -ArgumentList "/k", $webCmd -WindowStyle Normal
 
 # ---- Wait for frontend port ----
