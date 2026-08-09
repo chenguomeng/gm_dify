@@ -150,6 +150,14 @@ from .workspace import (
 
 api.add_namespace(console_ns)
 
+# 定制 by chengm xiaoyz抽卡模块 namespace 注册 start
+# 必须挂在 console blueprint 的 api 上：ext_login 只对 blueprint 名为
+# console / inner_api 的请求做 Passport 鉴权，独立 blueprint 会拿不到登录态。
+from customs.xiaoyz.controllers.xiaoyz_api import xiaoyz_ns  # noqa: E402
+
+api.add_namespace(xiaoyz_ns, path="/customs/xiaoyz")
+# 定制 by chengm xiaoyz抽卡模块 namespace 注册 end
+
 __all__ = [
     "account",
     "activate",

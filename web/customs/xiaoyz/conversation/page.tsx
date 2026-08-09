@@ -33,6 +33,7 @@ export default function XiaoyzConversationPage() {
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
   const [conversationId, setConversationId] = useState<string | null>(null)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   // Refs
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -92,24 +93,24 @@ export default function XiaoyzConversationPage() {
           inputs: {},
         },
         {
-          onData: (_data: any) => {
-            // SSE "message" 事件：增量文本
-            const chunk = _data?.answer || ''
-            fullContent += chunk
+          onData: (message: string, _isFirst: boolean, moreInfo: any) => {
+            // SSE "message" 事件：message 直接就是增量文本字符串
+            fullContent += message
             setStreamingContent(fullContent)
-            // 捕获 task_id 用于停止
-            if (_data?.task_id)
-              currentTaskIdRef.current = _data.task_id
+            // 捕获 task_id / conversation_id
+            if (moreInfo?.taskId)
+              currentTaskIdRef.current = moreInfo.taskId
+            if (moreInfo?.conversationId && !conversationId)
+              setConversationId(moreInfo.conversationId)
           },
           onMessageEnd: (_data: any) => {
-            // 消息结束：获取 conversation_id 和 message_id
+            // 消息结束：获取 conversation_id
             if (_data?.conversation_id)
               setConversationId(_data.conversation_id)
           },
-          onError: (_err: any) => {
-            console.error('Chat error:', _err)
-            const errMsg = _err?.message || '对话出错了，请重试'
-            setStreamingContent((prev) => prev || errMsg)
+          onError: (msg: string, _code?: string) => {
+            console.error('Chat error:', msg)
+            setStreamingContent((prev) => prev || `对话出错了：${msg}`)
           },
           onCompleted: () => {
             // 流结束：把临时内容固化为消息
@@ -131,6 +132,14 @@ export default function XiaoyzConversationPage() {
       )
     } catch (err: any) {
       console.error('Send message failed:', err)
+      // 解析错误消息
+      let msg = '对话失败，请重试'
+      try {
+        if (typeof err === 'string') msg = err
+        else if (err?.message) msg = err.message
+        else if (err?.body?.message) msg = err.body.message
+      } catch (_) { /* ignore */ }
+      setErrorMsg(msg)
       if (fullContent) {
         // 有部分内容也先保存
         setMessages((prev) => [
@@ -304,6 +313,19 @@ export default function XiaoyzConversationPage() {
           </div>
         )}
       </div>
+
+      {/* ── 错误提示 ── */}
+      {errorMsg && (
+        <div className="mt-3 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 dark:border-red-800 dark:bg-red-950">
+          <span className="text-sm text-red-600 dark:text-red-400">{errorMsg}</span>
+          <button
+            className="ml-auto shrink-0 text-xs text-red-400 hover:text-red-600"
+            onClick={() => setErrorMsg(null)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* ── 输入区 ── */}
       <div className="mt-3 shrink-0">

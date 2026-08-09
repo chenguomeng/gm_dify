@@ -124,8 +124,8 @@ function Install-FlaskRestx {
     git -C $FLASK_RESTX_DIR checkout --quiet $FLASK_RESTX_REV
     if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: checkout $FLASK_RESTX_REV failed" -ForegroundColor Red; exit 1 }
 
-    Write-Host "  installing flask-restx..."
-    & $VPY -m uv pip install --python $VPY $FLASK_RESTX_DIR
+    Write-Host "  installing flask-restx (pip)..."
+    & $VPY -m pip install --no-cache-dir $FLASK_RESTX_DIR
     if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: flask-restx install failed" -ForegroundColor Red; exit 1 }
 }
 Install-FlaskRestx

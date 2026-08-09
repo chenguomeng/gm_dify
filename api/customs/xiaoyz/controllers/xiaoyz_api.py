@@ -21,6 +21,7 @@ from libs.login import current_account_with_tenant, login_required
 from models.model import App
 from services.app_generate_service import AppGenerateService
 from services.app_task_service import AppTaskService
+from services.workflow_service import WorkflowService
 
 _logger = logging.getLogger(__name__)
 
@@ -109,6 +110,30 @@ chat_request_model = xiaoyz_ns.model(
 )
 
 
+def _get_required_inputs(app: App) -> list[dict]:
+    """获取 app 的必填输入变量列表"""
+    try:
+        workflow_service = WorkflowService()
+        draft = workflow_service.get_draft_workflow(app_model=app, session=db.session())
+        if not draft:
+            return []
+        nodes = draft.graph_dict.get("nodes", [])
+        required: list[dict] = []
+        for node in nodes:
+            node_data = node.get("data", {})
+            if node_data.get("type") == "start":
+                for var in node_data.get("variables", []):
+                    if var.get("required", False):
+                        required.append({
+                            "variable": var.get("variable", ""),
+                            "label": var.get("label", var.get("variable", "")),
+                            "type": var.get("type", "string"),
+                        })
+        return required
+    except Exception:
+        return []
+
+
 @xiaoyz_ns.route("/chat")
 class ChatApi(Resource):
     @xiaoyz_ns.doc("send_chat_message")
@@ -137,9 +162,20 @@ class ChatApi(Resource):
         if not app:
             raise NotFound(f"App not found: {payload.app_id}")
 
+        # 校验必填输入变量
+        user_inputs = payload.inputs or {}
+        required_vars = _get_required_inputs(app)
+        missing = [v for v in required_vars if not user_inputs.get(v["variable"])]
+        if missing:
+            labels = [m["label"] for m in missing]
+            raise BadRequest(
+                f"缺少必填输入变量: {', '.join(labels)}。"
+                f"请在请求的 inputs 中提供这些变量值。"
+            )
+
         args = {
             "query": payload.query,
-            "inputs": payload.inputs or {},
+            "inputs": user_inputs,
             "response_mode": "streaming",
             "auto_generate_name": False,
         }
