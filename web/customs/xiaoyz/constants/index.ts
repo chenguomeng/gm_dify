@@ -43,6 +43,8 @@ export const RARITY_OPTIONS = [
 export const DEFAULT_DRAW_COUNT = 10
 export const MAX_DRAW_COUNT = 100
 
-export const API_BASE = '/console/api/customs/xiaoyz'
+// service/base 会自动拼上 API_PREFIX（默认 http://host:5001/console/api），
+// 所以这里只写相对路径，不要再带 /console/api，否则会变成 /console/api/console/api/...
+export const API_BASE = '/customs/xiaoyz'
 
 // 定制 by chengm xiaoyz抽卡模块 constants end

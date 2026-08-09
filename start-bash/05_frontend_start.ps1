@@ -119,21 +119,59 @@ if ($webInUse) {
     pause; exit 1
 }
 
+Write-Host ""
+Write-Host "========================================"
+Write-Host "Memory tuning"
+Write-Host "========================================"
+# ---- Size the Node heap to the machine, not a fixed number ----
+# "Fatal process out of memory: Zone" means V8 asked the OS for memory and was
+# refused. A heap cap larger than available RAM makes this MORE likely: V8 keeps
+# growing instead of doing a full GC, until the OS says no. So cap at ~45% of
+# physical RAM, clamped to [4096, 8192] MB.
+$totalMB = [int]((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB)
+$heapMB  = [Math]::Round($totalMB * 0.45)
+if ($heapMB -lt 4096) { $heapMB = 4096 }
+if ($heapMB -gt 8192) { $heapMB = 8192 }
+Write-Host "Physical RAM: ${totalMB} MB -> Node heap cap: ${heapMB} MB"
+
+# Machines with <= 16 GB get low-memory dev mode (see web\next.config.ts):
+#   preloadEntriesOnStart=false, turbopackSourceMaps=false,
+#   onDemandEntries eviction after 25s, browser console forwarding = error only
+$lowMem = if ($totalMB -le 17000) { "1" } else { "0" }
+if ($lowMem -eq "1") {
+    Write-Host "Low-memory dev mode: ON (LOW_MEMORY_DEV=1)" -ForegroundColor Yellow
+    Write-Host "  Trade-off: first visit to each page compiles on demand, no browser source maps."
+    Write-Host "  Set LOW_MEMORY_DEV=0 manually to opt out."
+}
+
+# ---- Drop an oversized Turbopack dev cache ----
+# .next\dev is memory-mapped by the dev server; once it grows past a few GB it
+# is a major contributor to OOM. Rebuilding is slow but safe.
+$devCache = "$DIFY_WEB\.next\dev"
+if (Test-Path $devCache) {
+    $cacheMB = [int](((Get-ChildItem $devCache -Recurse -File -ErrorAction SilentlyContinue) | Measure-Object Length -Sum).Sum / 1MB)
+    Write-Host "Turbopack dev cache (.next\dev): ${cacheMB} MB"
+    if ($cacheMB -gt 3072) {
+        Write-Host "  Cache exceeds 3 GB, clearing it (first compile will be slower)..." -ForegroundColor Yellow
+        Remove-Item $devCache -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # ---- Start frontend dev server ----
 Write-Host ""
 Write-Host "========================================"
 Write-Host "Starting frontend dev server..."
 Write-Host "========================================"
 # NODE_OPTIONS tuning:
-#   --max-old-space-size=8192 : 8 GB heap (project is large; 4 GB can GC-thrash)
-#   DISABLE_CODE_INSPECTOR=1  : skip code-inspector-plugin → faster Turbopack compile
+#   --max-old-space-size=$heapMB : sized above from physical RAM
+#   DISABLE_CODE_INSPECTOR=1     : skip code-inspector-plugin → faster Turbopack compile
 #   To re-enable code inspector (click-to-open in IDE): remove DISABLE_CODE_INSPECTOR
 # Devtools (also controlled via web\.env.local → NEXT_PUBLIC_DISABLE_*):
 #   NEXT_PUBLIC_DISABLE_REACT_SCAN=1   : disable react-scan (component re-render visualizer)
 #   NEXT_PUBLIC_DISABLE_AGENTATION=1   : disable agentation (AI agent debugger)
 # Use the quoted form `set "VAR=value"`: the unquoted form swallows the space
 # before && into the value (PORT would become "3000 ").
-$webCmd = "cd /d `"$DIFY_WEB`" && set `"PORT=$DIFY_WEB_PORT`" && set `"DISABLE_CODE_INSPECTOR=1`" && set `"NODE_OPTIONS=--max-old-space-size=8192`" && pnpm run dev --turbo"
+$webCmd = "cd /d `"$DIFY_WEB`" && set `"PORT=$DIFY_WEB_PORT`" && set `"DISABLE_CODE_INSPECTOR=1`" && set `"LOW_MEMORY_DEV=$lowMem`" && set `"NODE_OPTIONS=--max-old-space-size=$heapMB`" && pnpm run dev --turbo"
 Start-Process cmd -ArgumentList "/k", $webCmd -WindowStyle Normal
 
 # ---- Wait for frontend port ----

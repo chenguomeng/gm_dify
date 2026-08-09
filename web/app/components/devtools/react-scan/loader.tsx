@@ -3,6 +3,7 @@ import Script from '@/next/script'
 
 export function ReactScanLoader() {
   if (!IS_DEV) return null
+  if (process.env.NEXT_PUBLIC_DISABLE_REACT_SCAN === '1') return null
 
   return (
     <Script

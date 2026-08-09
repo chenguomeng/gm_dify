@@ -14,16 +14,19 @@ services:
       PGDATA: ${PGDATA:-/var/lib/postgresql/data/pgdata}
     command: >
       postgres -c 'max_connections=${POSTGRES_MAX_CONNECTIONS:-100}'
-               -c 'shared_buffers=${POSTGRES_SHARED_BUFFERS:-128MB}'
-               -c 'work_mem=${POSTGRES_WORK_MEM:-4MB}'
-               -c 'maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-64MB}'
-               -c 'effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-4096MB}'
+               -c 'shared_buffers=${POSTGRES_SHARED_BUFFERS:-64MB}'
+               -c 'work_mem=${POSTGRES_WORK_MEM:-2MB}'
+               -c 'maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-32MB}'
+               -c 'effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-2048MB}'
                -c 'statement_timeout=${POSTGRES_STATEMENT_TIMEOUT:-0}'
                -c 'idle_in_transaction_session_timeout=${POSTGRES_IDLE_IN_TRANSACTION_SESSION_TIMEOUT:-0}'
     volumes:
       - ${PGDATA_HOST_VOLUME:-./volumes/db/data}:/var/lib/postgresql/data
     ports:
       - "${EXPOSE_POSTGRES_PORT:-5432}:5432"
+    # Hard memory cap. Keep well above shared_buffers + per-backend work_mem.
+    mem_limit: ${POSTGRES_MEM_LIMIT:-512m}
+    shm_size: ${POSTGRES_SHM_SIZE:-64m}
     healthcheck:
       test:
         [
@@ -51,14 +54,15 @@ services:
       MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-difyai123456}
       MYSQL_DATABASE: ${DB_DATABASE:-dify}
     command: >
-      --max_connections=${MYSQL_MAX_CONNECTIONS:-1000}
-      --innodb_buffer_pool_size=${MYSQL_INNODB_BUFFER_POOL_SIZE:-512M}
-      --innodb_log_file_size=${MYSQL_INNODB_LOG_FILE_SIZE:-128M}
+      --max_connections=${MYSQL_MAX_CONNECTIONS:-500}
+      --innodb_buffer_pool_size=${MYSQL_INNODB_BUFFER_POOL_SIZE:-256M}
+      --innodb_log_file_size=${MYSQL_INNODB_LOG_FILE_SIZE:-64M}
       --innodb_flush_log_at_trx_commit=${MYSQL_INNODB_FLUSH_LOG_AT_TRX_COMMIT:-2}
     volumes:
       - ${MYSQL_HOST_VOLUME:-./volumes/mysql/data}:/var/lib/mysql
     ports:
       - "${EXPOSE_MYSQL_PORT:-3306}:3306"
+    mem_limit: ${MYSQL_MEM_LIMIT:-512m}
     # mysqladmin ping passes during mysql:8.0's TCP-listening stage even while
     # the server is still finalising init, leading to "Lost connection during
     # query" on the first real query. Verify with a real SELECT instead.
@@ -91,9 +95,15 @@ services:
       # Mount the redis data directory to the container.
       - ${REDIS_HOST_VOLUME:-./volumes/redis/data}:/data
     # Set the redis password when startup redis server.
-    command: redis-server --requirepass ${REDIS_PASSWORD:-difyai123456}
+    # maxmemory caps the dataset; volatile-lru only evicts keys that carry a TTL,
+    # so Celery broker messages (no TTL) are never dropped — only cache entries.
+    command: >
+      redis-server --requirepass ${REDIS_PASSWORD:-difyai123456}
+                   --maxmemory ${REDIS_MAXMEMORY:-128mb}
+                   --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-volatile-lru}
     ports:
       - "${EXPOSE_REDIS_PORT:-6379}:6379"
+    mem_limit: ${REDIS_MEM_LIMIT:-256m}
     healthcheck:
       test:
         [
@@ -119,11 +129,15 @@ services:
       HTTPS_PROXY: ${SANDBOX_HTTPS_PROXY:-http://ssrf_proxy:3128}
       SANDBOX_PORT: ${SANDBOX_PORT:-8194}
       PIP_MIRROR_URL: ${PIP_MIRROR_URL:-}
+      # Soft GC target for the Go runtime, kept under mem_limit so the collector
+      # reclaims before the kernel OOM-kills the container.
+      GOMEMLIMIT: ${SANDBOX_GOMEMLIMIT:-192MiB}
     volumes:
       - ./volumes/sandbox/dependencies:/dependencies
       - ./volumes/sandbox/conf:/conf
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8194/health"]
+    mem_limit: ${SANDBOX_MEM_LIMIT:-256m}
     networks:
       - ssrf_proxy_network
 
@@ -185,11 +199,15 @@ services:
       THIRD_PARTY_SIGNATURE_VERIFICATION_ENABLED: true
       THIRD_PARTY_SIGNATURE_VERIFICATION_PUBLIC_KEYS: /app/keys/publickey.pem
       FORCE_VERIFYING_SIGNATURE: false
+      GOMEMLIMIT: ${PLUGIN_DAEMON_GOMEMLIMIT:-384MiB}
     ports:
       - "${EXPOSE_PLUGIN_DAEMON_PORT:-5002}:${PLUGIN_DAEMON_PORT:-5002}"
       - "${EXPOSE_PLUGIN_DEBUGGING_PORT:-5003}:${PLUGIN_DEBUGGING_PORT:-5003}"
     volumes:
       - ./volumes/plugin_daemon:/app/storage
+    # Headroom above the others: this process spawns Python plugin subprocesses,
+    # whose memory is charged to this container's cgroup.
+    mem_limit: ${PLUGIN_DAEMON_MEM_LIMIT:-512m}
 
   # ssrf_proxy server
   # for more information, please refer to
@@ -216,9 +234,13 @@ services:
       SSRF_PROXY_ALLOW_PRIVATE_DOMAINS: ${SSRF_PROXY_ALLOW_PRIVATE_DOMAINS:-}
       SSRF_SANDBOX_PROXY_PORT: ${SSRF_SANDBOX_PROXY_PORT:-8194}
       SSRF_SANDBOX_PROXY_HOST: ${SSRF_SANDBOX_PROXY_HOST:-sandbox}
+      # Squid in-memory cache budget, templated into squid.conf by the entrypoint.
+      SSRF_CACHE_MEM: ${SSRF_CACHE_MEM:-64 MB}
+      SSRF_MAX_OBJECT_SIZE_IN_MEMORY: ${SSRF_MAX_OBJECT_SIZE_IN_MEMORY:-256 KB}
     ports:
       - "${EXPOSE_SSRF_PROXY_PORT:-3128}:${SSRF_HTTP_PORT:-3128}"
       - "${EXPOSE_SANDBOX_PORT:-8194}:${SSRF_SANDBOX_PROXY_PORT:-8194}"
+    mem_limit: ${SSRF_PROXY_MEM_LIMIT:-192m}
     networks:
       - ssrf_proxy_network
       - default
@@ -249,9 +271,13 @@ services:
       AUTHORIZATION_ADMINLIST_ENABLED: ${WEAVIATE_AUTHORIZATION_ADMINLIST_ENABLED:-true}
       AUTHORIZATION_ADMINLIST_USERS: ${WEAVIATE_AUTHORIZATION_ADMINLIST_USERS:-hello@dify.ai}
       DISABLE_TELEMETRY: ${WEAVIATE_DISABLE_TELEMETRY:-false}
+      # Soft GC target held under mem_limit. Prefer this over LIMIT_RESOURCES,
+      # which auto-derives its own budget and would override the value below.
+      GOMEMLIMIT: ${WEAVIATE_GOMEMLIMIT:-384MiB}
     ports:
       - "${EXPOSE_WEAVIATE_PORT:-8080}:8080"
       - "${EXPOSE_WEAVIATE_GRPC_PORT:-50051}:50051"
+    mem_limit: ${WEAVIATE_MEM_LIMIT:-512m}
 
 networks:
   # create a network between sandbox, api and ssrf_proxy, and can not access outside.

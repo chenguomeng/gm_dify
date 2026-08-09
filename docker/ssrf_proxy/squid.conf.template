@@ -101,8 +101,9 @@ quick_abort_pct 95
 
 # Memory and cache optimization
 memory_cache_mode disk
-cache_mem 256 MB
-maximum_object_size_in_memory 512 KB
+# Substituted by docker-entrypoint.sh from the SSRF_CACHE_MEM env var.
+cache_mem ${SSRF_CACHE_MEM}
+maximum_object_size_in_memory ${SSRF_MAX_OBJECT_SIZE_IN_MEMORY}
 
 # DNS resolver settings for better performance
 dns_timeout 30 seconds

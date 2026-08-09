@@ -74,6 +74,13 @@ if [ -n "${SSRF_SANDBOX_PROXY_PORT:-}" ]; then
     } >> "$SANDBOX_PROXY_CONF"
 fi
 
+# Defaults for the memory knobs referenced by squid.conf.template. The awk
+# substitution below expands unset variables to an empty string, which would
+# emit an invalid "cache_mem" directive, so every templated var needs a default
+# here to stay safe when a compose file does not pass it through.
+export SSRF_CACHE_MEM="${SSRF_CACHE_MEM:-64 MB}"
+export SSRF_MAX_OBJECT_SIZE_IN_MEMORY="${SSRF_MAX_OBJECT_SIZE_IN_MEMORY:-256 KB}"
+
 # Replace environment variables in the template and output to the squid.conf
 echo "[ENTRYPOINT] replacing environment variables in the template"
 awk '{

@@ -9,6 +9,7 @@ const Agentation = dynamic(() => import('agentation').then((module) => module.Ag
 
 export function AgentationLoader() {
   if (!IS_DEV) return null
+  if (process.env.NEXT_PUBLIC_DISABLE_AGENTATION === '1') return null
 
   return <Agentation />
 }
