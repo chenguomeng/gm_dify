@@ -177,6 +177,23 @@ class ChatStopRequest(BaseModel):
     task_id: str = Field(..., description="任务 ID")
 
 
+# ── 对话持久化 ──
+
+
+class ConversationMessageItem(BaseModel):
+    """对话消息项"""
+    id: str
+    role: str  # 'user' | 'assistant'
+    content: str
+    created_at: str | None = None
+
+
+class ConversationLookupResponse(BaseModel):
+    """查找用户对话响应"""
+    conversation_id: str | None = None
+    messages: list[ConversationMessageItem] = Field(default_factory=list)
+
+
 # ── 通用 ──
 
 class SimpleResult(BaseModel):

@@ -7,6 +7,7 @@ import { API_BASE } from '../constants'
 import type {
   CardCollectionItem,
   ChatRequest,
+  ConversationLookupResponse,
   DifyApp,
   DifyAppVariables,
   DrawRequest,
@@ -73,6 +74,12 @@ export const fetchCollection = (params?: {
 
 // ── 智能对话 ──
 
+/** 查找当前用户在该 App 下的持久化会话 */
+export const fetchConversation = (appId: string) =>
+  get<ConversationLookupResponse>(`${API_BASE}/conversation`, {
+    params: { app_id: appId },
+  })
+
 /** 发送对话消息（SSE streaming） */
 export const sendChatMessage = (
   data: ChatRequest,
@@ -82,6 +89,8 @@ export const sendChatMessage = (
     onError: IOnError
     onMessageEnd?: (data: any) => void
     onMessageReplace?: IOnMessageReplace
+    onThought?: (thought: any) => void
+    onReasoning?: (reasoning: any) => void
     getAbortController?: (controller: AbortController) => void
   },
 ) => {

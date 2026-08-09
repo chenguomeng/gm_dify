@@ -106,4 +106,18 @@ export interface ChatRequest {
   inputs?: Record<string, any>
 }
 
+/** 对话消息项 */
+export interface ConversationMessageItem {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  created_at?: string
+}
+
+/** 对话查找响应 */
+export interface ConversationLookupResponse {
+  conversation_id: string | null
+  messages: ConversationMessageItem[]
+}
+
 // 定制 by chengm xiaoyz抽卡模块 types end

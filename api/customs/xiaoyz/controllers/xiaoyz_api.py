@@ -110,6 +110,37 @@ chat_request_model = xiaoyz_ns.model(
 )
 
 
+@xiaoyz_ns.route("/conversation")
+class ConversationLookupApi(Resource):
+    @xiaoyz_ns.doc("find_user_conversation")
+    @xiaoyz_ns.doc(params={"app_id": "Dify 应用 ID"})
+    @login_required
+    def get(self):
+        """查找当前用户在该 App 下的持久化会话
+
+        每个用户在一个 App 下只会有一个会话。
+        首次访问返回空（conversation_id=null），
+        之后每次打开页面都会复用同一个会话 ID，保持对话记录连续性。
+        """
+        app_id = request.args.get("app_id")
+        if not app_id:
+            raise BadRequest("app_id is required")
+
+        account, tenant_id = current_account_with_tenant()
+
+        # 验证 app 存在且属于当前租户
+        app = db.session.query(App).filter(
+            App.id == app_id,
+            App.tenant_id == tenant_id,
+        ).first()
+        if not app:
+            raise NotFound(f"App not found: {app_id}")
+
+        service = _get_service()
+        result = service.find_user_conversation(app_id=str(app.id), account_id=account.id)
+        return result.model_dump(mode="json")
+
+
 def _get_required_inputs(app: App) -> list[dict]:
     """获取 app 的必填输入变量列表"""
     try:
@@ -188,7 +219,7 @@ class ChatApi(Resource):
                 app_model=app,
                 user=account,
                 args=args,
-                invoke_from=InvokeFrom.DEBUGGER,
+                invoke_from=InvokeFrom.EXPLORE,
                 streaming=True,
             )
             return helper.compact_generate_response(response)
@@ -206,7 +237,7 @@ class ChatStopApi(Resource):
         try:
             AppTaskService.stop_task(
                 task_id=task_id,
-                invoke_from=InvokeFrom.DEBUGGER,
+                invoke_from=InvokeFrom.EXPLORE,
                 user_id=_current_tenant_and_user()[1],
                 app_mode="chat",
             )

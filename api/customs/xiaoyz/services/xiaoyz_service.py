@@ -19,6 +19,8 @@ from customs.xiaoyz.repositories.xiaoyz_repo import XiaoyzRepository
 from customs.xiaoyz.schemas.xiaoyz_schema import (
     CardCollectionItem,
     CardCollectionListResponse,
+    ConversationLookupResponse,
+    ConversationMessageItem,
     DifyAppItem,
     DifyAppListResponse,
     DifyAppVariablesResponse,
@@ -33,7 +35,7 @@ from customs.xiaoyz.schemas.xiaoyz_schema import (
 )
 from libs.helper import escape_like_pattern
 from libs.pagination import paginate_query
-from models.model import App, AppMode
+from models.model import App, AppMode, Conversation, Message
 from services.workflow_service import WorkflowService
 
 _logger = logging.getLogger(__name__)
@@ -423,6 +425,70 @@ class XiaoyzService:
                     return str(card_data[dify_output])
         # fallback: 直接取 card_data 的 name
         return str(card_data.get("name", "Unknown"))
+
+    # ── 对话持久化 ──
+
+    def find_user_conversation(
+        self,
+        app_id: str,
+        account_id: str,
+    ) -> ConversationLookupResponse:
+        """查找当前用户在该 App 下最近一次未删除的对话
+
+        每个用户（account）在一个 App 下只有一个持久化的会话，
+        页面重新打开时复用该会话，保持对话记录连续性。
+        """
+        conv = (
+            self._session.query(Conversation)
+            .filter(
+                Conversation.app_id == app_id,
+                Conversation.from_account_id == account_id,
+                Conversation.is_deleted == False,  # noqa: E712
+            )
+            .order_by(Conversation.updated_at.desc())
+            .first()
+        )
+
+        if not conv:
+            return ConversationLookupResponse(conversation_id=None, messages=[])
+
+        # 加载消息列表
+        msgs = (
+            self._session.query(Message)
+            .filter(
+                Message.conversation_id == conv.id,
+            )
+            .order_by(Message.created_at.asc())
+            .all()
+        )
+
+        message_items: list[ConversationMessageItem] = []
+        for m in msgs:
+            # 每个 Message 行同时包含 user query 和 assistant answer，
+            # 需要拆成两条 UI 消息
+            if m.query:
+                message_items.append(
+                    ConversationMessageItem(
+                        id=f"{m.id}-user",
+                        role="user",
+                        content=m.query,
+                        created_at=m.created_at.isoformat() if m.created_at else None,
+                    )
+                )
+            if m.answer:
+                message_items.append(
+                    ConversationMessageItem(
+                        id=f"{m.id}-assistant",
+                        role="assistant",
+                        content=m.answer,
+                        created_at=m.created_at.isoformat() if m.created_at else None,
+                    )
+                )
+
+        return ConversationLookupResponse(
+            conversation_id=str(conv.id),
+            messages=message_items,
+        )
 
     # ── 抽卡记录 ──
 
