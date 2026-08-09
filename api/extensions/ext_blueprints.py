@@ -119,16 +119,8 @@ def init_app(app: DifyApp):
     )
     app.register_blueprint(trigger_bp)
 
-    # 定制 by chengm xiaoyz抽卡模块 blueprint 注册 start
-    from customs.xiaoyz.controllers.xiaoyz_api import xiaoyz_bp as xiaoyz_app_bp
-
-    _apply_cors_once(
-        xiaoyz_app_bp,
-        resources={r"/*": {"origins": dify_config.CONSOLE_CORS_ALLOW_ORIGINS}},
-        supports_credentials=True,
-        allow_headers=list(AUTHENTICATED_HEADERS),
-        methods=["GET", "PUT", "POST", "DELETE", "OPTIONS", "PATCH"],
-        expose_headers=list(EXPOSED_HEADERS),
-    )
-    app.register_blueprint(xiaoyz_app_bp)
-    # 定制 by chengm xiaoyz抽卡模块 blueprint 注册 end
+    # 定制 by chengm xiaoyz抽卡模块 说明 start
+    # xiaoyz 的路由通过 controllers/console/__init__.py 里
+    # api.add_namespace(xiaoyz_ns, path="/customs/xiaoyz") 挂在 console
+    # blueprint 上，无需单独注册 blueprint（独立 blueprint 拿不到登录态）。
+    # 定制 by chengm xiaoyz抽卡模块 说明 end

@@ -1,7 +1,7 @@
 'use client'
 // 定制 by chengm xiaoyz RarityConfigPanel start
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { RARITY_CONFIG, RARITY_OPTIONS } from '../../constants'
 import DifyAppSelector from './DifyAppSelector'
 import VariableMapping from './VariableMapping'
@@ -106,6 +106,30 @@ function RarityRow({
   const [variables, setVariables] = useState<DifyVariable[]>([])
   const [outputVariables, setOutputVariables] = useState<DifyVariable[]>([])
   const [loadingVars, setLoadingVars] = useState(false)
+
+  // 编辑已有配置时，从 rarity 数据中恢复已绑定的 Dify 应用及变量
+  useEffect(() => {
+    if (rarity.dify_app_id && rarity.dify_app_name) {
+      const restoredApp: DifyApp = {
+        id: rarity.dify_app_id,
+        name: rarity.dify_app_name,
+        mode: '',
+      }
+      setApp(restoredApp)
+      // 加载该应用的输入/输出变量
+      setLoadingVars(true)
+      fetchDifyAppVariables(rarity.dify_app_id)
+        .then((res) => {
+          setVariables(res.inputs || [])
+          setOutputVariables(res.outputs || [])
+        })
+        .catch(() => {
+          setVariables([])
+          setOutputVariables([])
+        })
+        .finally(() => setLoadingVars(false))
+    }
+  }, [rarity.dify_app_id, rarity.dify_app_name])
 
   const rarityStyle = RARITY_CONFIG[rarity.rarity] || RARITY_CONFIG.R
 

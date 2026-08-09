@@ -6,6 +6,7 @@ import logging
 import random
 from typing import Any
 
+import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from customs.xiaoyz.models.xiaoyz_model import (
@@ -30,8 +31,9 @@ from customs.xiaoyz.schemas.xiaoyz_schema import (
     XiaoyzConfigPayload,
     XiaoyzConfigResponse,
 )
+from libs.helper import escape_like_pattern
+from libs.pagination import paginate_query
 from models.model import App, AppMode
-from services.app_service import AppListParams, AppService
 from services.workflow_service import WorkflowService
 
 _logger = logging.getLogger(__name__)
@@ -53,22 +55,49 @@ class XiaoyzService:
         keyword: str | None = None,
         page: int = 1,
         limit: int = 50,
+        mode: str | None = None,
     ) -> DifyAppListResponse:
-        """获取 Dify 平台的工作流/Agent 应用列表"""
-        app_service = AppService()
-        params = AppListParams(
-            page=page,
-            limit=limit,
-            mode="workflow",  # 主要获取工作流模式应用
-            name=keyword,
-            sort_by="last_modified",
-        )
+        """获取 Dify 平台的编排型应用列表
+
+        Args:
+            mode: 过滤模式，'workflow' → WORKFLOW（抽卡用），
+                  'chat' → CHAT+ADVANCED_CHAT+AGENT_CHAT+AGENT（对话用），
+                  None → 全部。
+
+        AppListParams.mode 只接受单个模式，而抽卡需要的是「带 graph 的编排应用」，
+        即 workflow(工作流) 与 advanced-chat(Chatflow) 两种，所以这里直接查 App 表。
+        """
+        del user_id  # 租户内配置页，按 tenant 维度取应用即可
         try:
-            pagination = app_service.get_paginate_apps(
-                user_id, tenant_id, params, self._session
+            # 根据 mode 参数决定要查哪些 AppMode
+            if mode == "chat":
+                target_modes = [AppMode.CHAT, AppMode.ADVANCED_CHAT, AppMode.AGENT_CHAT, AppMode.AGENT]
+            elif mode == "workflow":
+                target_modes = [AppMode.WORKFLOW]
+            else:
+                target_modes = [
+                    AppMode.WORKFLOW,
+                    AppMode.ADVANCED_CHAT,
+                    AppMode.CHAT,
+                    AppMode.AGENT_CHAT,
+                    AppMode.AGENT,
+                ]
+
+            filters = [
+                App.tenant_id == tenant_id,
+                App.is_universal == False,  # noqa: E712 SQLAlchemy 需要 == 而非 is
+                App.mode.in_(target_modes),
+            ]
+            if keyword:
+                escaped = escape_like_pattern(keyword[:30])
+                filters.append(App.name.ilike(f"%{escaped}%", escape="\\"))
+
+            pagination = paginate_query(
+                sa.select(App).where(*filters).order_by(App.updated_at.desc()),
+                page=page,
+                per_page=limit,
+                session=self._session,
             )
-            if not pagination:
-                return DifyAppListResponse(data=[], total=0)
 
             items = []
             for app in pagination.items:
@@ -104,7 +133,8 @@ class XiaoyzService:
             if not draft_workflow:
                 return DifyAppVariablesResponse()
 
-            graph = draft_workflow.graph or {}
+            # graph 字段存储的是 JSON 字符串，必须用 graph_dict 属性反序列化
+            graph = draft_workflow.graph_dict
             nodes = graph.get("nodes", [])
 
             inputs: list[DifyVariableItem] = []
@@ -131,7 +161,7 @@ class XiaoyzService:
                         )
 
                 elif node_type == "end":
-                    # 解析 end 节点的输出变量
+                    # workflow 模式：end 节点声明输出变量
                     outputs_config = node_data.get("outputs", [])
                     for out in outputs_config:
                         outputs.append(
@@ -142,7 +172,26 @@ class XiaoyzService:
                             )
                         )
 
-            return DifyAppVariablesResponse(inputs=inputs, outputs=outputs)
+                elif node_type == "answer":
+                    # advanced-chat(Chatflow) 模式：没有 end 节点，产出走 answer 节点
+                    outputs.append(
+                        DifyVariableItem(
+                            name="answer",
+                            type="string",
+                            label=node_data.get("title") or "answer",
+                        )
+                    )
+
+            # Chatflow 可能有多个 answer 节点，按变量名去重
+            seen_outputs: set[str] = set()
+            unique_outputs: list[DifyVariableItem] = []
+            for out in outputs:
+                if out.name in seen_outputs:
+                    continue
+                seen_outputs.add(out.name)
+                unique_outputs.append(out)
+
+            return DifyAppVariablesResponse(inputs=inputs, outputs=unique_outputs)
         except Exception as e:
             _logger.exception("Failed to get app variables for %s: %s", app_id, e)
             return DifyAppVariablesResponse()

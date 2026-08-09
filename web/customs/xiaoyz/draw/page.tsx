@@ -84,7 +84,14 @@ export default function XiaoyzDrawPage() {
           <h1 className="text-2xl font-bold text-text-primary">🎯 小冒险</h1>
           <p className="mt-1 text-sm text-text-tertiary">抽取卡牌，收集你的冒险伙伴</p>
         </div>
-        {configs.length > 1 && (
+        <div className="flex items-center gap-3">
+          <a
+            href="/xiaoyz/conversation"
+            className="rounded-lg border border-divider-regular px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-components-hover-bg"
+          >
+            💬 智能对话
+          </a>
+          {configs.length > 1 && (
           <select
             className="rounded-lg border border-divider-regular bg-components-input-bg-normal px-3 py-2 text-sm text-text-primary focus:border-primary-500 focus:outline-none"
             value={activeConfigId}
@@ -97,6 +104,7 @@ export default function XiaoyzDrawPage() {
             ))}
           </select>
         )}
+        </div>
       </div>
 
       {/* 抽卡按钮区域 */}

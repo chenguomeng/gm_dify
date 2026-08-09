@@ -161,6 +161,22 @@ class CardCollectionListResponse(BaseModel):
     has_more: bool = False
 
 
+# ── 智能对话 ──
+
+
+class ChatRequest(BaseModel):
+    """对话请求"""
+    app_id: str = Field(..., description="Dify 应用 ID")
+    query: str = Field(..., min_length=1, description="用户消息")
+    conversation_id: str | None = Field(None, description="会话 ID（新对话不传）")
+    inputs: dict[str, Any] = Field(default_factory=dict, description="输入变量")
+
+
+class ChatStopRequest(BaseModel):
+    """停止生成请求"""
+    task_id: str = Field(..., description="任务 ID")
+
+
 # ── 通用 ──
 
 class SimpleResult(BaseModel):

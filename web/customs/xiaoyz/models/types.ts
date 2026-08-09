@@ -88,4 +88,22 @@ export interface PaginatedResponse<T> {
   has_more: boolean
 }
 
+// ── 智能对话 ──
+
+/** 对话消息 */
+export interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  created_at?: string
+}
+
+/** 聊天请求 */
+export interface ChatRequest {
+  app_id: string
+  query: string
+  conversation_id?: string
+  inputs?: Record<string, any>
+}
+
 // 定制 by chengm xiaoyz抽卡模块 types end

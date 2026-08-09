@@ -3,25 +3,36 @@
 
 import logging
 
-from flask import Blueprint, request
+from flask import request
 from flask_restx import Namespace, Resource, fields
-from pydantic import BaseModel, Field
 from werkzeug.exceptions import BadRequest, NotFound
 
+from core.app.entities.app_invoke_entities import InvokeFrom
 from customs.xiaoyz.schemas.xiaoyz_schema import (
+    ChatRequest,
     DrawRequest,
     SimpleResult,
     XiaoyzConfigPayload,
 )
 from customs.xiaoyz.services.xiaoyz_service import XiaoyzService
 from extensions.ext_database import db
-from libs.login import login_required
+from libs import helper
+from libs.login import current_account_with_tenant, login_required
+from models.model import App
+from services.app_generate_service import AppGenerateService
+from services.app_task_service import AppTaskService
 
 _logger = logging.getLogger(__name__)
 
-# 创建独立的 Blueprint 和 Namespace
-xiaoyz_bp = Blueprint("xiaoyz", __name__, url_prefix="/console/api/customs/xiaoyz")
+# Namespace 由 controllers/console/__init__.py 以 path="/customs/xiaoyz"
+# 挂到 console blueprint 的 api 上，最终路径为 /console/api/customs/xiaoyz/...
 xiaoyz_ns = Namespace("xiaoyz", description="小冒险抽卡模块 API")
+
+
+def _current_tenant_and_user() -> tuple[str, str]:
+    """取当前登录账号的 tenant_id 与 user_id（真实 UUID，不能用占位值）"""
+    account, tenant_id = current_account_with_tenant()
+    return tenant_id, account.id
 
 
 # ── 请求体模型（flask-restx） ──
@@ -55,19 +66,19 @@ def _get_service() -> XiaoyzService:
 @xiaoyz_ns.route("/dify-apps")
 class DifyAppsApi(Resource):
     @xiaoyz_ns.doc("list_dify_apps")
-    @xiaoyz_ns.doc(params={"keyword": "搜索关键词", "page": "页码", "limit": "每页数量"})
+    @xiaoyz_ns.doc(params={"keyword": "搜索关键词", "page": "页码", "limit": "每页数量",
+                            "mode": "模式过滤: workflow(抽卡) / chat(对话) / 不传(全部)"})
     @login_required
     def get(self):
         """获取 Dify 工作流应用列表"""
         keyword = request.args.get("keyword")
+        mode = request.args.get("mode")
         page = int(request.args.get("page", 1))
         limit = int(request.args.get("limit", 50))
-        # 从请求上下文获取 tenant_id 和 user_id
-        tenant_id = getattr(request, "tenant_id", None) or "default"
-        user_id = getattr(request, "user_id", None) or "default"
+        tenant_id, user_id = _current_tenant_and_user()
 
         service = _get_service()
-        result = service.get_dify_apps(tenant_id, user_id, keyword, page, limit)
+        result = service.get_dify_apps(tenant_id, user_id, keyword, page, limit, mode=mode)
         return result.model_dump(mode="json")
 
 
@@ -77,10 +88,96 @@ class DifyAppVariablesApi(Resource):
     @login_required
     def get(self, app_id: str):
         """获取 Dify 工作流应用的输入/输出变量"""
-        tenant_id = getattr(request, "tenant_id", None) or "default"
+        tenant_id, _ = _current_tenant_and_user()
         service = _get_service()
         result = service.get_dify_app_variables(app_id, tenant_id)
         return result.model_dump(mode="json")
+
+
+# ═══════════════════════════════════════════════════════════
+# 智能对话（chat / agent-chat / agent 模式）
+# ═══════════════════════════════════════════════════════════
+
+chat_request_model = xiaoyz_ns.model(
+    "ChatRequest",
+    {
+        "app_id": fields.String(required=True, description="Dify 应用 ID"),
+        "query": fields.String(required=True, description="用户消息"),
+        "conversation_id": fields.String(description="会话 ID（新对话不传）"),
+        "inputs": fields.Raw(default={}, description="输入变量"),
+    },
+)
+
+
+@xiaoyz_ns.route("/chat")
+class ChatApi(Resource):
+    @xiaoyz_ns.doc("send_chat_message")
+    @xiaoyz_ns.expect(chat_request_model)
+    @login_required
+    def post(self):
+        """发送对话消息（SSE streaming 响应）
+
+        请求体: { app_id, query, conversation_id?, inputs? }
+        响应: text/event-stream (SSE)
+        """
+        try:
+            data = request.get_json(silent=True) or {}
+            payload = ChatRequest.model_validate(data)
+        except Exception as e:
+            raise BadRequest(f"Invalid payload: {e}") from e
+
+        # 获取完整的 Account 对象（AppGenerateService.generate 需要 Account 而非 user_id 字符串）
+        account, tenant_id = current_account_with_tenant()
+
+        # 验证 app 存在且属于当前租户
+        app = db.session.query(App).filter(
+            App.id == payload.app_id,
+            App.tenant_id == tenant_id,
+        ).first()
+        if not app:
+            raise NotFound(f"App not found: {payload.app_id}")
+
+        args = {
+            "query": payload.query,
+            "inputs": payload.inputs or {},
+            "response_mode": "streaming",
+            "auto_generate_name": False,
+        }
+        if payload.conversation_id:
+            args["conversation_id"] = payload.conversation_id
+
+        try:
+            response = AppGenerateService.generate(
+                session=db.session(),
+                app_model=app,
+                user=account,
+                args=args,
+                invoke_from=InvokeFrom.DEBUGGER,
+                streaming=True,
+            )
+            return helper.compact_generate_response(response)
+        except Exception as e:
+            _logger.exception("Chat generation failed")
+            raise BadRequest(f"Chat generation failed: {e}") from e
+
+
+@xiaoyz_ns.route("/chat/<string:task_id>/stop")
+class ChatStopApi(Resource):
+    @xiaoyz_ns.doc("stop_chat_message")
+    @login_required
+    def post(self, task_id: str):
+        """停止对话生成"""
+        try:
+            AppTaskService.stop_task(
+                task_id=task_id,
+                invoke_from=InvokeFrom.DEBUGGER,
+                user_id=_current_tenant_and_user()[1],
+                app_mode="chat",
+            )
+            return {"result": "success"}
+        except Exception as e:
+            _logger.exception("Failed to stop chat task")
+            raise BadRequest(f"Failed to stop task: {e}") from e
 
 
 # ═══════════════════════════════════════════════════════════
@@ -97,7 +194,7 @@ class ConfigListApi(Resource):
         page = int(request.args.get("page", 1))
         limit = int(request.args.get("limit", 20))
         status = request.args.get("status")
-        tenant_id = getattr(request, "tenant_id", None) or "default"
+        tenant_id, _ = _current_tenant_and_user()
 
         service = _get_service()
         result = service.list_configs(tenant_id, status, page, limit)
@@ -114,8 +211,7 @@ class ConfigListApi(Resource):
         except Exception as e:
             raise BadRequest(f"Invalid payload: {e}") from e
 
-        tenant_id = getattr(request, "tenant_id", None) or "default"
-        user_id = getattr(request, "user_id", None) or "default"
+        tenant_id, user_id = _current_tenant_and_user()
 
         service = _get_service()
         try:
@@ -202,8 +298,7 @@ class DrawApi(Resource):
         except Exception as e:
             raise BadRequest(f"Invalid payload: {e}") from e
 
-        user_id = getattr(request, "user_id", None) or "default"
-        tenant_id = getattr(request, "tenant_id", None) or "default"
+        tenant_id, user_id = _current_tenant_and_user()
 
         service = _get_service()
         try:
@@ -253,7 +348,7 @@ class CollectionApi(Resource):
         """获取用户卡牌收藏"""
         user_id = request.args.get("user_id")
         if not user_id:
-            user_id = getattr(request, "user_id", None) or "default"
+            _, user_id = _current_tenant_and_user()
         rarity = request.args.get("rarity")
         page = int(request.args.get("page", 1))
         limit = int(request.args.get("limit", 20))
@@ -262,10 +357,6 @@ class CollectionApi(Resource):
         result = service.list_collection(user_id, rarity, page, limit)
         return result.model_dump(mode="json")
 
-
-def create_xiaoyz_blueprint() -> Blueprint:
-    """创建并返回 xiaoyz blueprint（包含 namespace）"""
-    return xiaoyz_bp
 
 
 # 定制 by chengm xiaoyz抽卡模块 API 路由 end
